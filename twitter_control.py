@@ -2,6 +2,8 @@ import twitter
 import sqlite3
 import Queue
 import unicodedata
+import time
+import datetime
 
 class Controller(object):
     """Object for controlling and obtaining data from the twitter streams. 
@@ -12,6 +14,11 @@ class Controller(object):
         self.db = sqlite3.connect(dbname)
         self.cursor = self.db.cursor()
         self.create_sql_database()
+
+    def continue_grabbing(self, minutes=10):
+        while True:
+            self.get_all_wordlist_statuses()
+            time.sleep(minutes*60)
 
     def get_all_wordlist_statuses(self):
         additions = []
@@ -31,7 +38,7 @@ class Controller(object):
             try:
                 search = self.api.GetSearch(word, per_page=100, page=i)
                 count += len(search)
-                new_additions += self.db_insert_search(search)
+                new_additions += self.db_insert_search(search, word)
                 print word, i, len(search)
             except twitter.TwitterError:
                 NoError = False
@@ -41,7 +48,7 @@ class Controller(object):
     def create_sql_database(self):
         try:
             string = ('create table twitterdb(status_id int'
-                'primary key, datetime text, ' 
+                'primary key, keyword text, datetime text, ' 
                 'msg_text text, location text, user_id text, '
                 'user_screen_name text, '
                 'user_location text, user_followers_count int, '
@@ -51,7 +58,7 @@ class Controller(object):
         except sqlite3.OperationalError:
             pass
 
-    def db_insert_search(self, search):
+    def db_insert_search(self, search, keyword):
         new_additions = 0 
         unfinished = Queue.Queue()
         for s in search:
@@ -59,13 +66,13 @@ class Controller(object):
         while not unfinished.empty():
             status = unfinished.get()
             user = status.user
-            data_tuple = (status.id, status.created_at, 
+            data_tuple = (status.id, keyword, status.created_at,
                     status.text, status.location, user.id, user.screen_name,
                     user.location, user.followers_count,
                     user.statuses_count, user.friends_count)
             try:
                 self.cursor.execute('''insert into twitterdb values 
-                        (?,?,?,?,?,?,?,?,?,?)''', \
+                        (?,?,?,?,?,?,?,?,?,?,?)''', \
                         data_tuple)
                 unfinished.task_done()
                 self.db.commit()
@@ -96,7 +103,64 @@ class AnalyzeDatabase(object):
         execute_cmd = ('select status_id, count(status_id) '
                 'as numoccurrences from twitterdb group by '
                 'status_id having (count(status_id) > 1)')
-        return self.db.execute(execute_cmd):
+        return self.db.execute(execute_cmd)
+
+    def select_dates(self):
+        date_list = []
+        for row in self.db.execute('select datetime from twitterdb'):
+            datetime_str = unicodedata.normalize('NFKD', row[0]).encode(\
+                    'ascii', 'ignore')[:-5]
+            dtobj = datetime.datetime.strptime(\
+                    datetime_str, '%a, %d %b %Y %H:%M:%S ') 
+            date_list.append(dtobj)
+        date_list.sort(key = lambda d: (d.year, d.month, d.day, d.hour))
+        return date_list
+
+    def get_day_counts(self):
+        dates = {}
+        date_list = self.select_dates()
+        for d in date_list:
+            date = (d.year, d.month, d.day) 
+            try:
+                dates[date] += 1
+            except KeyError:
+                dates[date] = 1
+        return dates
+
+    def get_hour_counts(self):
+        hours = {}
+        date_list = self.select_dates()
+        for d in date_list:
+            try:
+                hours[d.hour] += 1
+            except KeyError:
+                hours[d.hour] = 1
+        return hours
+
+    def get_keyword_counts(self):
+        keywords = {}
+        for row in self.db.execute('select keyword from twitterdb'):
+            kw = unicodedata.normalize('NFKD', row[0]).encode(\
+                    'ascii', 'ignore')
+            try:
+                keywords[kw] += 1
+            except KeyError:
+                keywords[kw] = 1
+        return keywords
+
+    def get_keyword_day_counts(self):
+        kwday = {}
+        for row in self.db.execute(\
+                'select keyword, datetime from twitterdb'):
+            keyword = unicodedata.normalize('NFKD', row[0]).encode(\
+                    'ascii', 'ignore')
+            datetime_str = unicodedata.normalize('NFKD', row[1]).encode(\
+                    'ascii', 'ignore')[:-5]
+            try:
+                kwday[(datetime_str, keyword)] += 1
+            except KeyError:
+                kwday[(datetime_str, keyword)] = 1
+
 
 
 def test():
@@ -116,7 +180,9 @@ if __name__ == '__main__':
    
     a = AnalyzeDatabase()
     a.select_duplicates()
+    print a.get_day_counts()
+    print a.get_hour_counts()
     word_list = ['economy', 'jobs', 'finance', 'recession', 'stock market']
-    control = Controller(word_list)
-    control.get_all_wordlist_statuses()
+    #control = Controller(word_list)
+    #control.get_all_wordlist_statuses()
 
