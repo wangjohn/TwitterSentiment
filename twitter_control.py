@@ -19,7 +19,7 @@ class Controller(object):
             word = self.track_word_list[i]
             additions.append(self.get_statuses(word))
         new_additions = [(additions[i], self.track_word_list[i]) for i in \
-                xrange(len(self.track_Word_list))]
+                xrange(len(self.track_word_list))]
         print new_additions
 
     def get_statuses(self, word):
@@ -40,11 +40,13 @@ class Controller(object):
 
     def create_sql_database(self):
         try:
-            self.cursor.execute('''create table twitterdb(status_id int primary key, datetime text, 
-                   msg_text text, location text, user_id text,
-                   user_screen_name text,
-                   user_location text, user_followers_count int, 
-                   user_statuses_count int, user_friends_count int)''')
+            string = ('create table twitterdb(status_id int'
+                'primary key, datetime text, ' 
+                'msg_text text, location text, user_id text, '
+                'user_screen_name text, '
+                'user_location text, user_followers_count int, '
+                'user_statuses_count int, user_friends_count int)')
+            self.cursor.execute(string)
             self.db.commit()
         except sqlite3.OperationalError:
             pass
@@ -82,16 +84,19 @@ class AnalyzeDatabase(object):
         self.cursor = self.db.cursor()
     
     def select_text(self):
+        text_list = []
         for row in self.db.execute(\
                 "select msg_text, status_id from twitterdb"):
             words = unicodedata.normalize('NFKD', row[0]).encode('ascii',\
                     'ignore')
-            print words
+            text_list.append(words)
+        return text_list
 
     def select_duplicates(self, category="status_id"):
-        for row in self.db.execute(\
-                "select status_id, count(status_id) as numoccurrences from twitterdb group by status_id having (count(status_id) > 1)"):
-            print row
+        execute_cmd = ('select status_id, count(status_id) '
+                'as numoccurrences from twitterdb group by '
+                'status_id having (count(status_id) > 1)')
+        return self.db.execute(execute_cmd):
 
 
 def test():
@@ -109,11 +114,9 @@ def test():
 if __name__ == '__main__':
     #test()
    
-    #a = AnalyzeDatabase()
-    #a.select_duplicates()
+    a = AnalyzeDatabase()
+    a.select_duplicates()
     word_list = ['economy', 'jobs', 'finance', 'recession', 'stock market']
     control = Controller(word_list)
     control.get_all_wordlist_statuses()
-    a = [len(control.status_dic_list[i]) for i in xrange(len(control.status_dic_list))]
-    print a
 
