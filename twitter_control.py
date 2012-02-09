@@ -5,23 +5,72 @@ import unicodedata
 import time
 import datetime
 import csv
+import threading
+import signal
+import sys
+
+
+
+class TimeoutException(Exception):
+    pass
+
+class TimeoutFunction(object):
+    """Object for making a TimeoutException if a function has run 
+    on for too long without a response."""
+    def __init__(self, function, timeout):
+        self.timeout = timeout
+        self.function = function
+
+    def handle_timeout(self, signum, frame):
+        raise TimeoutException()
+
+    def __call__(self, word, per_page, page):
+        old = signal.signal(signal.SIGALRM, self.handle_timeout)
+        signal.alarm(self.timeout)
+        try:
+            result = self.function(word, per_page=per_page, page=page)
+        finally:
+            signal.signal(signal.SIGALRM, old)
+        signal.alarm(0)
+        return result
 
 class Controller(object):
     """Object for controlling and obtaining data from the twitter streams. 
     Takes this data then puts it into a SQL database."""
-    def __init__(self, track_word_list, dbname="twitterdb"):
+    def __init__(self, track_word_list, dbname="twitterdb", timeout=20):
         self.track_word_list = track_word_list
         self.api = twitter.Api()
         self.db = sqlite3.connect(dbname)
         self.cursor = self.db.cursor()
         self.create_sql_database()
+        self.timeout = timeout
 
-    def continue_grabbing(self, minutes=10):
+    def continue_grabbing(self, minutes=10, multithread=False):
         while True:
-            self.get_all_wordlist_statuses()
+            if multithread:
+                self.get_all_statuses_multithread()
+            else:
+                self.get_all_statuses()
             time.sleep(minutes*60)
 
-    def get_all_wordlist_statuses(self):
+    def get_all_statuses_multithread(self, threads=3):
+        additions = 0
+        word_queue = Queue.Queue()
+        queue = Queue.Queue()
+        for word in self.track_word_list:
+            word_queue.put(word)
+        for i in xrange(threads):
+            gs = GetStatuses(word_queue, queue, self.timeout)
+            gs.start()
+        for i in xrange(1):
+            dbinsert = DatabaseInsert(queue, additions)
+            dbinsert.setDaemon(True)
+            dbinsert.start()
+        word_queue.join()
+        queue.join()
+        print additions
+
+    def get_all_statuses(self):
         additions = []
         for i in xrange(len(self.track_word_list)):
             word = self.track_word_list[i]
@@ -37,12 +86,16 @@ class Controller(object):
         new_additions = 0
         while NoError:
             try:
-                search = self.api.GetSearch(word, per_page=100, page=i)
+                searchFun = TimeoutFunction(self.api.GetSearch, self.timeout)
+                search = searchFun(word, 100, i)
                 count += len(search)
                 new_additions += self.db_insert_search(search, word)
                 print word, i, len(search)
             except twitter.TwitterError:
                 NoError = False
+            except TimeoutException:
+                i -= 1
+                print 'Timeout Exception: %s, %s' % (word, str(i))
             i += 1
         return new_additions
 
@@ -87,6 +140,70 @@ class Controller(object):
                 pass
             unfinished.task_done() 
         return new_additions
+
+class DatabaseInsert(threading.Thread):
+    def __init__(self, queue, new_additions, dbname='twitterdb',
+            max_attempts = 1000):
+        threading.Thread.__init__(self)
+        self.queue = queue
+        self.new_additions = new_additions
+        self.db = sqlite3.connect(dbname, check_same_thread=False)
+        self.cursor = self.db.cursor()
+        self.max_attempts = max_attempts
+
+    def run(self):
+        while (not self.queue.empty()):
+            (status, keyword, attempts) = self.queue.get()
+            user = status.user
+            dtobj = datetime.datetime.strptime(\
+                    status.created_at[:-5], '%a, %d %b %Y %H:%M:%S ') 
+            time = dtobj.strftime('%Y-%m-%d %H:%M:%S')
+            data_tuple = (status.id, keyword, time,
+                    status.text, status.location, user.id, user.screen_name,
+                    user.location, user.followers_count,
+                    user.statuses_count, user.friends_count)
+            try:
+                self.cursor.execute('''insert into twitterdb values 
+                        (?,?,?,?,?,?,?,?,?,?,?)''', \
+                        data_tuple)
+                self.db.commit()
+                self.new_additions += 1
+                print status.id
+            except sqlite3.OperationalError:
+                if attempts < self.max_attempts:
+                    self.queue.put((status, keyword, attempts+1))
+            except sqlite3.IntegrityError:
+                pass
+            self.queue.task_done() 
+
+class GetStatuses(threading.Thread):
+    def __init__(self, word_queue, queue, timeout=20):
+        threading.Thread.__init__(self)
+        self.word_queue = word_queue
+        self.queue = queue
+        self.timeout = timeout
+        self.api = twitter.Api()
+
+    def run(self):
+        while (not self.word_queue.empty()):
+            word = self.word_queue.get()
+            NoError = True
+            i = 1
+            while NoError:
+                try:
+                    searchFun = TimeoutFunction(self.api.GetSearch, \
+                            self.timeout)
+                    search = searchFun(word, 100, i)
+                    for s in search:
+                        self.queue.put((s, word, 0))
+                    print word, i, len(search)
+                except twitter.TwitterError:
+                    NoError = False
+                except TimeoutException:
+                    i -= 1
+                    print 'Timeout Exception: %s, %s' % (word, str(i))
+                i += 1
+            self.word_queue.task_done()
 
 
 class AnalyzeDatabase(object):
@@ -172,11 +289,17 @@ class AnalyzeDatabase(object):
                 'datetime between \"%s\" and \"%s\"') \
                 % (start_date, end_date)
         writer = csv.writer(open(filename, 'wb'))
+        writer.writerow(['Status ID', 'Keyword', 'Time',\
+                'Tweet', 'Location', 'User ID', 'User Screen Name', \
+                'User Location', 'User Followers Count', \
+                'User Statuses Count', 'User Friends Count'])
         for row in self.db.execute(cmd):
             new_row = []
             for s in row:
                 if isinstance(s, unicode): 
                     new_row.append(s.encode('utf-8'))
+                elif s == None:
+                    new_row.append(' ')
                 else:
                     new_row.append(s)
             writer.writerow(new_row)
@@ -186,6 +309,7 @@ def parse_tweet(status, pos_emotes=[':)', ':-)', ': )', ':D', '=)'], \
         neg_emotes=[':(',':-(',': (']):
     """Removes urls, usernames, and repeated letters. 
     Also looks for emoticons."""
+
     text = status.text
     if status.urls != None:
         for url in status.urls:
@@ -220,7 +344,11 @@ def parse_tweet(status, pos_emotes=[':)', ':-)', ': )', ':D', '=)'], \
                 both = True
             sentiment -= 1
             text = ''.join(text.split(emote))
-    return (text, sentiment, both)
+    if 'RT' in text:
+        retweet = True
+    else:
+        retweet = False
+    return (text, sentiment, both, retweet)
 
 
 def test():
@@ -237,10 +365,11 @@ if __name__ == '__main__':
     print a.get_day_counts()
     print a.get_hour_counts()
     print a.get_keyword_day_counts()
-    start = datetime.datetime(2012, 1, 1, 0, 0)
-    end = datetime.datetime(2012, 3, 1, 0, 0)
+    start = datetime.datetime(2012, 2, 1, 0, 0)
+    end = datetime.datetime(2012, 2, 12, 0, 0)
     a.make_csv('testpull.csv', start, end)
     word_list = ['economy', 'jobs', 'finance', 'recession', 'stock market']
     control = Controller(word_list)
-    control.get_all_wordlist_statuses()
+    #control.get_all_statuses_multithread()
+    control.get_all_statuses()
 
