@@ -4,6 +4,7 @@ import Queue
 import unicodedata
 import time
 import datetime
+import csv
 
 class Controller(object):
     """Object for controlling and obtaining data from the twitter streams. 
@@ -48,7 +49,7 @@ class Controller(object):
     def create_sql_database(self):
         try:
             string = ('create table twitterdb(status_id int'
-                'primary key, keyword text, datetime text, ' 
+                'primary key, keyword text, datetime timestamp, ' 
                 'msg_text text, location text, user_id text, '
                 'user_screen_name text, '
                 'user_location text, user_followers_count int, '
@@ -66,7 +67,10 @@ class Controller(object):
         while not unfinished.empty():
             status = unfinished.get()
             user = status.user
-            data_tuple = (status.id, keyword, status.created_at,
+            dtobj = datetime.datetime.strptime(\
+                    status.created_at[:-5], '%a, %d %b %Y %H:%M:%S ') 
+            time = dtobj.strftime('%Y-%m-%d %H:%M:%S')
+            data_tuple = (status.id, keyword, time,
                     status.text, status.location, user.id, user.screen_name,
                     user.location, user.followers_count,
                     user.statuses_count, user.friends_count)
@@ -74,15 +78,16 @@ class Controller(object):
                 self.cursor.execute('''insert into twitterdb values 
                         (?,?,?,?,?,?,?,?,?,?,?)''', \
                         data_tuple)
-                unfinished.task_done()
                 self.db.commit()
                 new_additions += 1
             except sqlite3.OperationalError:
                 unfinished.put(status)
-                unfinished.task_done()
             except sqlite3.IntegrityError:
+                print 'Fail'
                 pass
+            unfinished.task_done() 
         return new_additions
+
 
 class AnalyzeDatabase(object):
     """Class for analyzing and performing queries on the database."""
@@ -99,21 +104,14 @@ class AnalyzeDatabase(object):
             text_list.append(words)
         return text_list
 
-    def select_duplicates(self, category="status_id"):
-        execute_cmd = ('select status_id, count(status_id) '
-                'as numoccurrences from twitterdb group by '
-                'status_id having (count(status_id) > 1)')
-        return self.db.execute(execute_cmd)
-
     def select_dates(self):
         date_list = []
-        for row in self.db.execute('select datetime from twitterdb'):
-            datetime_str = unicodedata.normalize('NFKD', row[0]).encode(\
-                    'ascii', 'ignore')[:-5]
-            dtobj = datetime.datetime.strptime(\
-                    datetime_str, '%a, %d %b %Y %H:%M:%S ') 
+        for row in self.db.execute(('select datetime from twitterdb')):
+            dtobj = datetime.datetime.strptime(row[0], \
+                    '%Y-%m-%d %H:%M:%S')
             date_list.append(dtobj)
-        date_list.sort(key = lambda d: (d.year, d.month, d.day, d.hour))
+        date_list.sort(key = lambda d: (d.year, d.month, d.day, \
+                d.hour, d.minute))
         return date_list
 
     def get_day_counts(self):
@@ -154,35 +152,95 @@ class AnalyzeDatabase(object):
                 'select keyword, datetime from twitterdb'):
             keyword = unicodedata.normalize('NFKD', row[0]).encode(\
                     'ascii', 'ignore')
-            datetime_str = unicodedata.normalize('NFKD', row[1]).encode(\
-                    'ascii', 'ignore')[:-5]
+            dtobj = datetime.datetime.strptime(row[1], \
+                    '%Y-%m-%d %H:%M:%S')
+            date = (dtobj.year, dtobj.month, dtobj.day) 
             try:
-                kwday[(datetime_str, keyword)] += 1
+                kwday[(date, keyword)] += 1
             except KeyError:
-                kwday[(datetime_str, keyword)] = 1
+                kwday[(date, keyword)] = 1
+        return kwday
 
+    def make_csv(self, filename, start_date, end_date):
+        """start_date and end_date should be datetime objects while 
+        filename should be a string such as 'this_file.csv' for which
+        you would like to write the data."""
+
+        start = start_date.strftime('%Y-%m-%d %H:%M:%S')
+        end = end_date.strftime('%Y-%m-%d %H:%M:%S')
+        cmd = ('select * from twitterdb where ' \
+                'datetime between \"%s\" and \"%s\"') \
+                % (start_date, end_date)
+        writer = csv.writer(open(filename, 'wb'))
+        for row in self.db.execute(cmd):
+            new_row = []
+            for s in row:
+                if isinstance(s, unicode): 
+                    new_row.append(s.encode('utf-8'))
+                else:
+                    new_row.append(s)
+            writer.writerow(new_row)
+
+
+def parse_tweet(status, pos_emotes=[':)', ':-)', ': )', ':D', '=)'], \
+        neg_emotes=[':(',':-(',': (']):
+    """Removes urls, usernames, and repeated letters. 
+    Also looks for emoticons."""
+    text = status.text
+    if status.urls != None:
+        for url in status.urls:
+            split_text = text.split(url)
+            text = 'URL'.join(split_text)
+    
+    if status.user_mentions != None:
+        for user in status.user_mentions:
+            split_text = text.split(user)
+            text = 'USERNAME'.join(split_text)
+    
+    delete = []
+    for i in xrange(len(text)):
+        prev1 = None
+        prev2 = None
+        if prev2 == prev1 and prev1 == text[i]:
+            delete.append(i)
+        prev2 = prev1
+        prev1 = text[i]
+    new_indices = [i for i in xrange(text) not in delete]
+    text = ''.join([text[i] for i in new_indices])
+
+    sentiment = 0
+    both = False
+    for emote in pos_emotes:
+        if emote in text:
+            sentiment += 1
+            text = ''.join(text.split(emote))
+    for emote in neg_emotes:
+        if emote in text:
+            if (sentiment > 0) and (both == False):
+                both = True
+            sentiment -= 1
+            text = ''.join(text.split(emote))
+    return (text, sentiment, both)
 
 
 def test():
     api = twitter.Api()
-    statuses = api.GetPublicTimeline()
-    print [s.created_at for s in statuses]
-    print [s.id for s in statuses]
-    print [s.text for s in statuses]
-    print [s.location for s in statuses]
-    print [s.user.screen_name for s in statuses]
-    print [s.user.location for s in statuses]
-    print [s.user.followers_count for s in statuses]
-    print [s.hashtags for s in statuses]
+    while True:
+        statuses = api.GetPublicTimeline()
+        a = [s.user_mentions for s in statuses if s.user_mentions is not None]
+        b = [s.urls for s in statuses if s.urls is not None]
+        print a, b
 
 if __name__ == '__main__':
     #test()
-   
     a = AnalyzeDatabase()
-    a.select_duplicates()
     print a.get_day_counts()
     print a.get_hour_counts()
+    print a.get_keyword_day_counts()
+    start = datetime.datetime(2012, 1, 1, 0, 0)
+    end = datetime.datetime(2012, 3, 1, 0, 0)
+    a.make_csv('testpull.csv', start, end)
     word_list = ['economy', 'jobs', 'finance', 'recession', 'stock market']
-    #control = Controller(word_list)
-    #control.get_all_wordlist_statuses()
+    control = Controller(word_list)
+    control.get_all_wordlist_statuses()
 
