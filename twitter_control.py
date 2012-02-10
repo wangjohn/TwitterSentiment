@@ -16,7 +16,7 @@ import csv
 import threading
 import signal
 import sys
-
+import parse_text
 
 class TimeoutException(Exception):
     pass
@@ -110,10 +110,12 @@ class Controller(object):
         try:
             string = ('create table twitterdb(status_id int'
                 'primary key, keyword text, datetime timestamp, ' 
-                'msg_text text, location text, user_id text, '
+                'msg_text text, parsed_text text, location text, '
                 'user_screen_name text, '
-                'user_location text, user_followers_count int, '
-                'user_statuses_count int, user_friends_count int)')
+                'url1 text, url2 text, url3 text, '
+                'hashtag1 text, hashtag2 text, hashtag3 text, '
+                'hashtag4 text, hashtag5 text, '
+                'user1 text, user2 text, user3 text)')
             self.cursor.execute(string)
             self.db.commit()
         except sqlite3.OperationalError:
@@ -130,21 +132,34 @@ class Controller(object):
             dtobj = datetime.datetime.strptime(\
                     status.created_at[:-5], '%a, %d %b %Y %H:%M:%S ') 
             time = dtobj.strftime('%Y-%m-%d %H:%M:%S')
-            data_tuple = (status.id, keyword, time,
-                    status.text, status.location, user.id, user.screen_name,
-                    user.location, user.followers_count,
-                    user.statuses_count, user.friends_count)
-            try:
-                self.cursor.execute('''insert into twitterdb values 
-                        (?,?,?,?,?,?,?,?,?,?,?)''', \
-                        data_tuple)
-                self.db.commit()
-                new_additions += 1
-            except sqlite3.OperationalError:
-                unfinished.put(status)
-            except sqlite3.IntegrityError:
-                print 'Fail'
-                pass
+            parsed = parse_text.parse_tweet(status.text)
+            if parsed != None:
+                (text, tweet_dic, sentiment) = parsed
+                urls = tweet_dic['URL'].extend([None, None, None])
+                urls = tweet_dic['URL'][:3]
+                hashtags = tweet_dic['HASHTAG'].extend(\
+                        [None, None, None, None, None])
+                hashtags = tweet_dic['HASHTAG'][:5]
+                users = tweet_dic['USER'].extend([None, None, None])
+                users = tweet_dic['USER'][:3]
+
+                data_tuple = (status.id, keyword, time,
+                        status.text, text, status.location, user.screen_name,
+                        urls[0], urls[1], urls[2], 
+                        hashtags[0], hashtags[1], hashtags[2], hashtags[3],
+                        hashtags[4], 
+                        users[0], users[1], users[2])
+                try:
+                    self.cursor.execute('''insert into twitterdb values 
+                            (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', \
+                            data_tuple)
+                    self.db.commit()
+                    new_additions += 1
+                except sqlite3.OperationalError:
+                    unfinished.put(status)
+                except sqlite3.IntegrityError:
+                    print 'Fail'
+                    pass
             unfinished.task_done() 
         return new_additions
 
@@ -164,23 +179,36 @@ class DatabaseInsert(threading.Thread):
             user = status.user
             dtobj = datetime.datetime.strptime(\
                     status.created_at[:-5], '%a, %d %b %Y %H:%M:%S ') 
-            time = dtobj.strftime('%Y-%m-%d %H:%M:%S')
-            data_tuple = (status.id, keyword, time,
-                    status.text, status.location, user.id, user.screen_name,
-                    user.location, user.followers_count,
-                    user.statuses_count, user.friends_count)
-            try:
-                self.cursor.execute('''insert into twitterdb values 
-                        (?,?,?,?,?,?,?,?,?,?,?)''', \
-                        data_tuple)
-                self.db.commit()
-                self.new_additions += 1
-                print status.id
-            except sqlite3.OperationalError:
-                if attempts < self.max_attempts:
-                    self.queue.put((status, keyword, attempts+1))
-            except sqlite3.IntegrityError:
-                pass
+            time = dtobj.strftime('%Y-%m-%d %H:%M:%S') 
+            parsed = parse_text.parse_tweet(status.text)
+            if parsed != None:
+                (text, tweet_dic, sentiment) = parsed
+                urls = tweet_dic['URL'].extend([None, None, None])
+                urls = tweet_dic['URL'][:3]
+                hashtags = tweet_dic['HASHTAG'].extend(\
+                        [None, None, None, None, None])
+                hashtags = tweet_dic['HASHTAG'][:5]
+                users = tweet_dic['USER'].extend([None, None, None])
+                users = tweet_dic['USER'][:3]
+
+                data_tuple = (status.id, keyword, time,
+                        status.text, text, status.location, user.screen_name,
+                        urls[0], urls[1], urls[2], 
+                        hashtags[0], hashtags[1], hashtags[2], hashtags[3],
+                        hashtags[4], 
+                        users[0], users[1], users[2])
+                try:
+                    self.cursor.execute('''insert into twitterdb values 
+                            (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', \
+                            data_tuple)
+                    self.db.commit()
+                    self.new_additions += 1
+                    print status.id
+                except sqlite3.OperationalError:
+                    if attempts < self.max_attempts:
+                        self.queue.put((status, keyword, attempts+1))
+                except sqlite3.IntegrityError:
+                    pass
             self.queue.task_done() 
 
 class GetStatuses(threading.Thread):
@@ -296,10 +324,11 @@ class AnalyzeDatabase(object):
                 'datetime between \"%s\" and \"%s\"') \
                 % (start_date, end_date)
         writer = csv.writer(open(filename, 'wb'))
-        writer.writerow(['Status ID', 'Keyword', 'Time',\
-                'Tweet', 'Location', 'User ID', 'User Screen Name', \
-                'User Location', 'User Followers Count', \
-                'User Statuses Count', 'User Friends Count'])
+        writer.writerow(['Status ID', 'Keyword', 'Time', 'Original Tweet',\
+                'Parsed Tweet', 'Location', 'User Screen Name', \
+                'URL 1', 'URL 2', 'URL 3', \
+                'Hashtag 1', 'Hashtag 2', 'Hashtag 3', 'Hashtag 4', 'Hashtag 5', \
+                'User 1', 'User 2', 'User 3'])
         for row in self.db.execute(cmd):
             new_row = []
             for s in row:
@@ -358,16 +387,7 @@ def parse_tweet(status, pos_emotes=[':)', ':-)', ': )', ':D', '=)'], \
     return (text, sentiment, both, retweet)
 
 
-def test():
-    api = twitter.Api()
-    while True:
-        statuses = api.GetPublicTimeline()
-        a = [s.user_mentions for s in statuses if s.user_mentions is not None]
-        b = [s.urls for s in statuses if s.urls is not None]
-        print a, b
-
-if __name__ == '__main__':
-    #test()
+def test_analyze():
     a = AnalyzeDatabase()
     print a.get_day_counts()
     print a.get_hour_counts()
@@ -375,6 +395,9 @@ if __name__ == '__main__':
     start = datetime.datetime(2012, 2, 1, 0, 0)
     end = datetime.datetime(2012, 2, 12, 0, 0)
     a.make_csv('testpull.csv', start, end)
+
+if __name__ == '__main__':
+    test_analyze()
     word_list = ['economy', 'jobs', 'finance', 'recession', 'stock market']
     control = Controller(word_list)
     #control.get_all_statuses_multithread()

@@ -1,0 +1,17 @@
+Metadata-Version: 1.0
+Name: twitter-text-py
+Version: 1.0.4
+Summary: A library for auto-converting URLs, mentions, hashtags, lists, etc. in Twitter text. Also does tweet validation and search term highlighting.
+Home-page: http://github.com/dryan/twitter-text-py
+Author: Daniel Ryan
+Author-email: dryan@dryan.com
+License: BSD
+Description: UNKNOWN
+Platform: UNKNOWN
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Web Environment
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Framework :: Django
