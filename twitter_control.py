@@ -1,4 +1,12 @@
 import twitter
+# Author: John Wang
+# Date: 2/9/2012
+#
+# Description: Connects to the Twitter API and collects data, storing
+# the data in a SQLite database called twitterdb. It 
+# contains a class for data analysis as well.
+
+
 import sqlite3
 import Queue
 import unicodedata
@@ -8,7 +16,6 @@ import csv
 import threading
 import signal
 import sys
-
 
 
 class TimeoutException(Exception):
