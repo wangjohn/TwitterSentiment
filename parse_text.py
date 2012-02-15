@@ -97,33 +97,19 @@ def remove_emoticons(text, pos_emotes, neg_emotes):
             negative += 1
     return (text, positive, negative)
 
-def check_for_url(text):
-    # Check for different urls that can be on twitter 
-    words = text.split()
-    simple_url_re = re.compile(r' (https?://.*?) ')
-    simple_url_2_re = re.compile(r'www\.|^(?!http)\w[^@]+\.(com|edu|gov|int|mil|net|org)$')
-    urlcodes = ['.com', '.edu', '.gov', '.int', '.mil', '.net', \
-            '.org', 'tgr.ph', '.ie', '.it', 'twurl.nl', \
-            '.ly', '.co', '.uk', '.in', '.bg', '.me']
 
-    url = None
-    surl = simple_url_re.search(text)
-    surl2 = simple_url_2_re.search(text)
-    if surl:
-        print simple_url_re.sub('URL', text)
-        url = surl.group(0)
-        print url
-    elif surl2:
-        url = surl2.group(0)
-    else:
-        for i in xrange(len(words)):
-            for uc in urlcodes:
-                if uc in words[i]:
-                    words[i] = 'URL'
-    return url
+def reformat_word(word):
+    """Returns a string which strips away non alpha-numeric characters and 
+    turns everything to lowercase. For example, the function would 
+    turn "Hello!" into "hello"."""
+    word = word.lower()
+    return ''.join([s for s in word if s.isalnum()])
 
 if __name__ == '__main__':
     a = 'Rhema #Vaithianathan - Are Bad Managers To Blame For NZ\'s Poor Economic Performance? yhoo.it/ypM4yy : )  #via @scoopnz'
     print parse_tweet(a)
     b = 'hello :\ :/ my name is =/ =\ joooooohnnnmyname'
     print parse_tweet(b)
+
+    a = '!!hello!?'
+    print reformat_word(a)

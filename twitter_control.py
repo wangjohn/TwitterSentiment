@@ -17,6 +17,7 @@ import threading
 import signal
 import sys
 import parse_text
+import parse_tree
 
 class TimeoutException(Exception):
     pass
@@ -44,7 +45,8 @@ class TimeoutFunction(object):
 class Controller(object):
     """Object for controlling and obtaining data from the twitter streams. 
     Takes this data then puts it into a SQL database."""
-    def __init__(self, track_word_list, dbname="twitterdb", timeout=20):
+    def __init__(self, track_word_list, dbname="twitterdb", \
+            wordfreqdb="wordfreq",timeout=20):
         self.track_word_list = track_word_list
         self.api = twitter.Api()
         self.db = sqlite3.connect(dbname)
@@ -121,6 +123,7 @@ class Controller(object):
         except sqlite3.OperationalError:
             pass
 
+
     def db_insert_search(self, search, keyword):
         new_additions = 0 
         unfinished = Queue.Queue()
@@ -160,6 +163,7 @@ class Controller(object):
                 except sqlite3.IntegrityError:
                     print 'Fail'
                     pass
+
             unfinished.task_done() 
         return new_additions
 
@@ -313,8 +317,60 @@ class AnalyzeDatabase(object):
                 kwday[(date, keyword)] = 1
         return kwday
 
+    def get_word_freq(self, filename, start_date, end_date, pos=None, neg=None):
+        """Returns a tuple (pos_score, neg_score) of the counts of
+        positive words and negative scores. Also creates
+        a csv of word frequencies. pos should be a list of positive
+        words and neg should be a list of negative words. start_date 
+        and end_date should be datetime objects while
+        filename should be a string such as 'this_file.csv' for which
+        you would like to write the data. The csv will contain word
+        frequencies for all words seen in between start_date and 
+        end_date."""
+
+        start = start_date.strftime('%Y-%m-%d %H:%M:%S')
+        end = end_date.strftime('%Y-%m-%d %H:%M:%S')
+        cmd = ('select parsed_text from twitterdb where ' \
+                'datetime between \"%s\" and \"%s\"') \
+                % (start_date, end_date)
+        freq_dic = {}
+        for row in self.db.execute(cmd):
+            text = row[0]
+            words = text.split()
+            for word in words:
+                word = parse_text.reformat_word(word)
+                try:
+                    freq_dic[word] += 1
+                except KeyError:
+                    freq_dic[word] = 1
+
+        writer = csv.writer(open(filename, 'wb'))
+        writer.writerow(['Word', 'Frequency Count'])
+        ptree = parse_tree.ParseTree()
+        for (word, count) in freq_dic.iteritems():
+            word = word.encode('utf-8')
+            if word != '':
+                writer.writerow([word, count])
+                ptree.insert(word, count)
+        
+        pos_score = 0
+        neg_score = 0
+        if pos != None:
+            for word in pos:
+                count = ptree.find(word)
+                if count != None:
+                    pos_score += count
+        if neg != None:
+            for word in neg:
+                count = ptree.find(word)
+                if count != None:
+                    neg_score += count
+
+        return (pos_score, neg_score)
+
     def make_csv(self, filename, start_date, end_date):
-        """start_date and end_date should be datetime objects while 
+        """Will contain all of the data acquired between start_date and
+        end _date. tart_date and end_date should be datetime objects while 
         filename should be a string such as 'this_file.csv' for which
         you would like to write the data."""
 
@@ -395,6 +451,7 @@ def test_analyze():
     start = datetime.datetime(2012, 2, 1, 0, 0)
     end = datetime.datetime(2012, 2, 12, 0, 0)
     a.make_csv('testpull.csv', start, end)
+    a.get_word_freq('word_freq.csv', start, end)
 
 if __name__ == '__main__':
     test_analyze()
