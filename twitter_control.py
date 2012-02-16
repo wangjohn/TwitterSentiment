@@ -396,53 +396,6 @@ class AnalyzeDatabase(object):
                     new_row.append(s)
             writer.writerow(new_row)
 
-
-def parse_tweet(status, pos_emotes=[':)', ':-)', ': )', ':D', '=)'], \
-        neg_emotes=[':(',':-(',': (']):
-    """Removes urls, usernames, and repeated letters. 
-    Also looks for emoticons."""
-
-    text = status.text
-    if status.urls != None:
-        for url in status.urls:
-            split_text = text.split(url)
-            text = 'URL'.join(split_text)
-    
-    if status.user_mentions != None:
-        for user in status.user_mentions:
-            split_text = text.split(user)
-            text = 'USERNAME'.join(split_text)
-    
-    delete = []
-    for i in xrange(len(text)):
-        prev1 = None
-        prev2 = None
-        if prev2 == prev1 and prev1 == text[i]:
-            delete.append(i)
-        prev2 = prev1
-        prev1 = text[i]
-    new_indices = [i for i in xrange(text) not in delete]
-    text = ''.join([text[i] for i in new_indices])
-
-    sentiment = 0
-    both = False
-    for emote in pos_emotes:
-        if emote in text:
-            sentiment += 1
-            text = ''.join(text.split(emote))
-    for emote in neg_emotes:
-        if emote in text:
-            if (sentiment > 0) and (both == False):
-                both = True
-            sentiment -= 1
-            text = ''.join(text.split(emote))
-    if 'RT' in text:
-        retweet = True
-    else:
-        retweet = False
-    return (text, sentiment, both, retweet)
-
-
 def test_analyze():
     a = AnalyzeDatabase()
     print a.get_day_counts()
@@ -451,7 +404,16 @@ def test_analyze():
     start = datetime.datetime(2012, 2, 1, 0, 0)
     end = datetime.datetime(2012, 2, 12, 0, 0)
     a.make_csv('testpull.csv', start, end)
-    a.get_word_freq('word_freq.csv', start, end)
+    positive = read_in_words('positive.csv')
+    negative = read_in_words('negative.csv')
+    print a.get_word_freq('word_freq.csv', start, end, positive, negative)
+
+def read_in_words(filename):
+    reader = csv.reader(open(filename, 'rb'))
+    words = []
+    for word in reader:
+        words.extend(word)
+    return words
 
 if __name__ == '__main__':
     test_analyze()
