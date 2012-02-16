@@ -113,7 +113,8 @@ class Controller(object):
             string = ('create table twitterdb(status_id int'
                 'primary key, keyword text, datetime timestamp, ' 
                 'msg_text text, parsed_text text, location text, '
-                'user_screen_name text, '
+                'user_screen_name text, emoticon_sentiment int, '
+                'twitrratr_sentiment int, mpqa_sentiment int, '
                 'url1 text, url2 text, url3 text, '
                 'hashtag1 text, hashtag2 text, hashtag3 text, '
                 'hashtag4 text, hashtag5 text, '
@@ -123,6 +124,35 @@ class Controller(object):
         except sqlite3.OperationalError:
             pass
 
+    def create_parse_tree(self, positive, negative):
+        """Creates a parse tree that stores the polarity of words. 
+        The positive list should include positive words and the 
+        negative list should include negative words."""
+        new_tree = parse_tree.ParseTree()
+        try:
+            self.parse_tree.append(new_tree)
+        except NameError:
+            self.parse_tree = [new_tree]
+        for word in positive:
+            new_tree.insert(word, 1)
+        for word in negative:
+            new_tree.insert(word, -1)
+
+    def search_parse_tree(self, tree, key):
+        result = tree.find(key)
+        if result == None:
+            return 0
+        else:
+            return result
+
+    def get_sentence_sentiment(self, text):
+        words = text.split()
+        polarity = [0 for i in xrange(len(self.parse_tree))]
+        for word in words:
+            word = parse_text.reformat_word(word)
+            for i in xrange(len(self.parse_tree)):
+                polarity[i] += self.search_parse_tree(self.parse_tree[i], word)
+        return polarity
 
     def db_insert_search(self, search, keyword):
         new_additions = 0 
@@ -146,15 +176,18 @@ class Controller(object):
                 users = tweet_dic['USER'].extend([None, None, None])
                 users = tweet_dic['USER'][:3]
 
+                polarity = self.get_sentence_sentiment(text)
+
                 data_tuple = (status.id, keyword, time,
                         status.text, text, status.location, user.screen_name,
+                        sentiment, polarity[0], polarity[1],
                         urls[0], urls[1], urls[2], 
                         hashtags[0], hashtags[1], hashtags[2], hashtags[3],
                         hashtags[4], 
                         users[0], users[1], users[2])
                 try:
                     self.cursor.execute('''insert into twitterdb values 
-                            (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', \
+                            (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', \
                             data_tuple)
                     self.db.commit()
                     new_additions += 1
@@ -357,12 +390,12 @@ class AnalyzeDatabase(object):
         neg_score = 0
         if pos != None:
             for word in pos:
-                count = ptree.find(word)
+                count = ptree.find_value(word)
                 if count != None:
                     pos_score += count
         if neg != None:
             for word in neg:
-                count = ptree.find(word)
+                count = ptree.find_value(word)
                 if count != None:
                     neg_score += count
 

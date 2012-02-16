@@ -31,9 +31,9 @@ def parse_tweet(status, pos_emotes=[':\)', ':-\)', ': \)', ':D', \
     elif positive > 0:
         sentiment = 1
     elif negative > 0:
-        sentiment = 0
+        sentiment = -1
     else:
-        sentiment = None
+        sentiment = 0
 
     new_text = remove_multiple_repeats(new_text)
     

@@ -56,7 +56,10 @@ class ParseTree(object):
         return new_node
 
     def find_value(self, key):
-        return self.find(key).value
+        if self.find(key) == None:
+            return None
+        else:
+            return self.find(key).value
 
 
 
